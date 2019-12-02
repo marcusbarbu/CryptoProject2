@@ -33,10 +33,9 @@ class ProtoHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         global switchboard
-        rec_q, send_q = None, None
         try:
             self.data = self.request.recv(1024).strip().decode('ascii')
-            if self.data not in switchboard.keys() or switchboard[self.data] == None:
+            if self.data not in switchboard.keys():
                 switchboard[self.data] = ChatroomQueue(self.data)
             c_q = switchboard[self.data]
             rec_q, send_q = c_q.get_queues()
@@ -60,10 +59,6 @@ class ProtoHandler(socketserver.BaseRequestHandler):
                     self.qprint(msg)
         except Exception as e:
             print(e)
-    
-    def finish(self):
-        global switchboard
-        switchboard[self.data] = None
 
 
 class ThreadProtoServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
