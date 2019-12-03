@@ -46,6 +46,7 @@ class ProtoHandler(socketserver.BaseRequestHandler):
                     try:
                         m = self.request.recv(4096, socket.MSG_DONTWAIT).strip().decode('ascii')
                         if len(m) == 0:
+                            c_q.user_set -= 1
                             print("killing thread {}".format(threading.current_thread().name))
                             return
                         msg.append(m)
