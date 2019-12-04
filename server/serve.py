@@ -1,81 +1,81 @@
-import socketserver
-import socket
-import threading 
-import time
-import random
-import queue
+#!/usr/bin/env python3
 
+import socketserver
+import threading
+import uuid
 
 switchboard = {}
 
-class ChatroomQueue:
-    def __init__(self, name):
-        self.a_queue = queue.Queue()
-        self.b_queue = queue.Queue()
-        self.user_set = 0
-    
 
-    def get_queue(self, index):
-        l = [self.a_queue, self.b_queue]
-        return l[index]
+class ChatroomQueue(object):
+    def __init__(self):
+        self.msg_queues = {}
 
-    def get_queues(self):
-        l = [self.a_queue, self.b_queue]
-        x = self.user_set
-        self.user_set = (self.user_set + 1) % 2
-        return l[x], l[(x+1)%2]
+    def add_client(self):
+        id = str(uuid.uuid4())
+        self.msg_queues[id] = []
+        return id
 
-       
+    def add_msg(self, id, to, msg):
+        if to == 0:
+            for key, queue in self.msg_queues.items():
+                if key != id:
+                    queue.append((id, msg))
+        elif to in self.msg_queues:
+            self.msg_queues[to].append((id, msg))
 
-class ProtoHandler(socketserver.BaseRequestHandler):
-    def qprint(self, message):
-        self.request.sendall(bytes(message+'\n','ascii'))
+    def get_msgs(self, id):
+        msgs = self.msg_queues[id]
+        self.msg_queues[id] = []
+        return msgs
+
+
+class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
+    def send(self, message):
+        self.request.sendall(bytes(message + '\n', 'ascii'))
+
+    def recv(self):
+        return self.request.recv(1024).strip().decode('ascii')
 
     def handle(self):
-        global switchboard
-        try:
-            self.data = self.request.recv(1024).strip().decode('ascii')
-            if self.data not in switchboard.keys():
-                switchboard[self.data] = ChatroomQueue(self.data)
-            c_q = switchboard[self.data]
-            rec_q, send_q = c_q.get_queues()
+        setup_info = self.recv()
+        if '|' not in setup_info:
+            return
 
-            while True:
-                msg = []
-                while True:
-                    try:
-                        m = self.request.recv(4096, socket.MSG_DONTWAIT).strip().decode('ascii')
-                        if len(m) == 0:
-                            c_q.user_set -= 1
-                            print("killing thread {}".format(threading.current_thread().name))
-                            return
-                        msg.append(m)
-                    except:
-                        break
-                msg = ''.join(msg)
-                if len(msg) > 0:
-                    send_q.put(msg)
-                if not rec_q.empty():
-                    msg = rec_q.get()
-                    self.qprint(msg)
-        except Exception as e:
-            print(e)
+        hashed_pword, nonce = setup_info.split('|')
+        if hashed_pword not in switchboard:
+            switchboard[hashed_pword] = ChatroomQueue()
+
+        room = switchboard[hashed_pword]
+        id = room.add_client()
+        room.add_msg(id, 0, nonce)
+
+        while True:
+            new_msg = self.recv()
+            if ':' in new_msg:
+                to, msg = new_msg.split(':')
+                room.add_msg(id, to, msg)
+            for sender, msg in room.get_msgs(id):
+                msg = ':'.join((sender, msg))
+                self.send(msg)
 
 
-class ThreadProtoServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     pass
+
 
 if __name__ == '__main__':
     host = '0.0.0.0'
     port = 1234
 
-    server = ThreadProtoServer((host,port), ProtoHandler)
+    server = ThreadedTCPServer((host, port), ThreadedTCPRequestHandler)
+    server.allow_reuse_address = True
     try:
-        with server:
-            server_thread = threading.Thread(target=server.serve_forever)
-            server_thread.daemon = True
-            server_thread.start()
-            while True:
-                time.sleep(1)
-    except:
+        server_thread = threading.Thread(target=server.serve_forever)
+        # Exit the server thread when the main thread terminates
+        server_thread.daemon = True
+        server_thread.start()
+        while True:
+            pass
+    except KeyboardInterrupt:
         server.shutdown()
