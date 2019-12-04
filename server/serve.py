@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
+import logging
+import select
 import socketserver
 import threading
+import time
 import uuid
 
 switchboard = {}
@@ -37,6 +40,10 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def recv(self):
         return self.request.recv(1024).strip().decode('ascii')
 
+    def data_present(self):
+        present, _, _ = select.select([self.request], [], [], 0.5)
+        return len(present) > 0
+
     def handle(self):
         setup_info = self.recv()
         if '|' not in setup_info:
@@ -51,10 +58,11 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         room.add_msg(id, 0, nonce)
 
         while True:
-            new_msg = self.recv()
-            if ':' in new_msg:
-                to, msg = new_msg.split(':')
-                room.add_msg(id, to, msg)
+            if self.data_present():
+                new_msg = self.recv()
+                if ':' in new_msg:
+                    to, msg = new_msg.split(':')
+                    room.add_msg(id, to, msg)
             for sender, msg in room.get_msgs(id):
                 msg = ':'.join((sender, msg))
                 self.send(msg)
@@ -65,17 +73,17 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
     host = '0.0.0.0'
     port = 1234
 
     server = ThreadedTCPServer((host, port), ThreadedTCPRequestHandler)
-    server.allow_reuse_address = True
     try:
         server_thread = threading.Thread(target=server.serve_forever)
         # Exit the server thread when the main thread terminates
         server_thread.daemon = True
         server_thread.start()
         while True:
-            pass
+            time.sleep(0.5)
     except KeyboardInterrupt:
         server.shutdown()

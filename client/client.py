@@ -25,7 +25,7 @@ class Client(object):
         self.sock.sendall(bytes(message + '\n', 'ascii'))
 
     def sendto(self, to, message):
-        self.send(':'.join((to, message)))
+        self.send(':'.join((to, str(message))))
 
     def recv(self):
         return self.sock.recv(1024).strip().decode('ascii')
@@ -56,7 +56,7 @@ class Client(object):
         partner = None
         while True:
             new_msg = self.recv()
-            print(new_msg)
+            print('msg', new_msg)
             sender, data = new_msg.split(':')
             try:
                 new_nonce = int(data)
@@ -71,7 +71,7 @@ class Client(object):
                     _, recv_integrity = data.split('|')
                     if recv_integrity == self.integrity:
                         other_acks.add(sender)
-            intersect = own_acks.intersect(other_acks)
+            intersect = own_acks.intersection(other_acks)
             if len(intersect) > 0:
                 partner = intersect[0]
                 break
