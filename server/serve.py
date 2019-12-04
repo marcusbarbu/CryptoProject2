@@ -20,7 +20,7 @@ class ChatroomQueue(object):
         return id
 
     def add_msg(self, id, to, msg):
-        if to == 0:
+        if to == '0':
             for key, queue in self.msg_queues.items():
                 if key != id:
                     queue.append((id, msg))
@@ -35,34 +35,47 @@ class ChatroomQueue(object):
 
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def send(self, message):
-        self.request.sendall(bytes(message + '\n', 'ascii'))
+        logging.info('send: ' + message)
+        self.request.sendall(bytes(message + '\n', 'UTF-8'))
 
     def recv(self):
-        return self.request.recv(1024).strip().decode('ascii')
+        msg = self.request.recv(1024).strip().decode('UTF-8')
+        logging.info('recv: ' + msg)
+        return msg
 
     def data_present(self):
-        present, _, _ = select.select([self.request], [], [], 0.5)
+        present, _, _ = select.select([self.request], [], [], 1)
         return len(present) > 0
 
     def handle(self):
-        setup_info = self.recv()
-        if '|' not in setup_info:
-            return
-
-        hashed_pword, nonce = setup_info.split('|')
+        buffer = []
+        hashed_pword = self.recv()
+        if '\n' in hashed_pword:
+            recvd_lines = hashed_pword.split('\n')
+            hashed_pword = recvd_lines[0]
+            buffer += recvd_lines[1:]
         if hashed_pword not in switchboard:
             switchboard[hashed_pword] = ChatroomQueue()
 
         room = switchboard[hashed_pword]
         id = room.add_client()
-        room.add_msg(id, 0, nonce)
 
         while True:
+            if buffer:
+                for msg in buffer:
+                    if ':' in msg:
+                        to, msg = msg.split(':', 1)
+                        room.add_msg(id, to, msg)
+                buffer = []
             if self.data_present():
-                new_msg = self.recv()
-                if ':' in new_msg:
-                    to, msg = new_msg.split(':')
-                    room.add_msg(id, to, msg)
+                data = self.recv()
+                if data == '':
+                    self.request.close()
+                    return
+                if '\n' in data:
+                    buffer += data.split('\n')
+                else:
+                    buffer.append(data)
             for sender, msg in room.get_msgs(id):
                 msg = ':'.join((sender, msg))
                 self.send(msg)
@@ -85,5 +98,5 @@ if __name__ == '__main__':
         server_thread.start()
         while True:
             time.sleep(0.5)
-    except KeyboardInterrupt:
+    except Exception:
         server.shutdown()

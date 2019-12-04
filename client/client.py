@@ -12,7 +12,8 @@ class Client(object):
     def __init__(self, host, port, passphrase):
         self.passphrase = passphrase
         self.ack_phrase = 'ack'
-        self.integrity = self.hmac(self.ack_phrase)
+        self.integrity = str(base64.b64encode(self.hmac(self.ack_phrase)))
+        self.partner = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         except socket.error as e:
@@ -24,62 +25,74 @@ class Client(object):
     def send(self, message):
         self.sock.sendall(bytes(message + '\n', 'ascii'))
 
-    def sendto(self, to, message):
-        self.send(':'.join((to, str(message))))
+    def sendto(self, to, type, message):
+        self.send(':'.join([to, type, str(message)]))
+
+    def sendmsg(self, message):
+        self.sendto(self.partner, 'msg', message)
 
     def recv(self):
-        return self.sock.recv(1024).strip().decode('ascii')
+        msg = self.sock.recv(1024).strip().decode('ascii')
+        return msg
 
-    def recvfrom(self, target):
+    def recvmsg(self):
         sender = ''
         data = ''
-        while target != sender:
-            sender, data = self.recv().split(':')
+        while sender != self.partner:
+            try:
+                sender, _, data = self.recv().split(':')
+            except ValueError:
+                continue
         return data
 
     def hmac(self, data):
-        return hmac.new(self.passphrase.encode('UTF-8'),
-                        msg=data.encode('UTF-8'),
+        return hmac.new(self.passphrase.encode('ascii'),
+                        msg=data.encode('ascii'),
                         digestmod=hashlib.sha256).digest()
 
     def connect(self):
         m = hashlib.sha256()
-        m.update(self.passphrase.encode('UTF-8'))
+        m.update(self.passphrase.encode('ascii'))
         hashed_pword = str(base64.b64encode(m.digest()))
-        random_nonce = uuid.uuid4().int & (1 << 64) - 1
-        auth = '|'.join((hashed_pword, str(random_nonce)))
-        self.send(auth)
+        self.send(hashed_pword)
 
-        valid_hmac = self.hmac(str(random_nonce + 1))
+        random_nonce = uuid.uuid4().int & (1 << 64) - 1
+        self.sendto('0', 'nonce', random_nonce)
+
+        valid_hmac = str(base64.b64encode(self.hmac(str(random_nonce + 1))))
         own_acks = set([])
         other_acks = set([])
-        partner = None
-        while True:
-            new_msg = self.recv()
-            print('msg', new_msg)
-            sender, data = new_msg.split(':')
+        nonces_sent = []
+        while self.partner is None:
             try:
-                new_nonce = int(data)
-                if new_nonce != random_nonce:
-                    self.sendto(sender, self.hmac(str(new_nonce + 1)))
+                sender, type, data = self.recv().split(':')
             except ValueError:
+                continue
+            if type == 'nonce':
+                try:
+                    new_nonce = int(data)
+                except ValueError:
+                    continue
+                if new_nonce != random_nonce:
+                    gen_hmac = base64.b64encode(self.hmac(str(new_nonce + 1)))
+                    self.sendto(sender, 'hmac', gen_hmac)
+                    if sender not in nonces_sent:
+                        self.sendto(sender, 'nonce', str(random_nonce))
+            elif type == 'hmac':
+                nonces_sent.append(sender)
                 if data == valid_hmac:
-                    ack = '|'.join((self.ack_phrase, self.integrity))
-                    self.sendto(sender, ack)
+                    self.sendto(sender, self.ack_phrase, self.integrity)
                     own_acks.add(sender)
-                elif 'ack|' in data:
-                    _, recv_integrity = data.split('|')
-                    if recv_integrity == self.integrity:
-                        other_acks.add(sender)
+            elif type == 'ack':
+                if data == self.integrity:
+                    other_acks.add(sender)
             intersect = own_acks.intersection(other_acks)
             if len(intersect) > 0:
-                partner = intersect[0]
-                break
-
-        self.sendto(partner, 'we cool')
-        print(self.recvfrom(partner))
+                self.partner = list(intersect)[0]
 
 
 if __name__ == '__main__':
     client1 = Client('0.0.0.0', 1234, 'cookie')
     client1.connect()
+    client1.sendmsg('we cool')
+    print(client1.recvmsg())
