@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import click
 import logging
 import select
 import socketserver
@@ -15,12 +16,12 @@ class ChatroomQueue(object):
         self.msg_queues = {}
 
     def add_client(self):
-        id = str(uuid.uuid4())
+        id = str(uuid.uuid4()).encode('ascii')
         self.msg_queues[id] = []
         return id
 
     def add_msg(self, id, to, msg):
-        if to == '0':
+        if to == b'0':
             for key, queue in self.msg_queues.items():
                 if key != id:
                     queue.append((id, msg))
@@ -35,23 +36,22 @@ class ChatroomQueue(object):
 
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def send(self, message):
-        logging.info('send: ' + message)
-        self.request.sendall(bytes(message + '\n', 'UTF-8'))
+        self.request.sendall(message + b'\n')
 
     def recv(self):
-        msg = self.request.recv(1024).strip().decode('UTF-8')
-        logging.info('recv: ' + msg)
-        return msg
+        return self.request.recv(1024).strip()
 
     def data_present(self):
         present, _, _ = select.select([self.request], [], [], 1)
         return len(present) > 0
 
     def handle(self):
+        logging.info('new connection')
         buffer = []
         hashed_pword = self.recv()
-        if '\n' in hashed_pword:
-            recvd_lines = hashed_pword.split('\n')
+        logging.debug('hash: %s', hashed_pword)
+        if b'\n' in hashed_pword:
+            recvd_lines = hashed_pword.split(b'\n')
             hashed_pword = recvd_lines[0]
             buffer += recvd_lines[1:]
         if hashed_pword not in switchboard:
@@ -63,21 +63,25 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         while True:
             if buffer:
                 for msg in buffer:
-                    if ':' in msg:
-                        to, msg = msg.split(':', 1)
+                    if b':' in msg:
+                        logging.debug('recv from %s type %s: %s',
+                                      *msg.split(b':'))
+                        to, msg = msg.split(b':', 1)
                         room.add_msg(id, to, msg)
                 buffer = []
             if self.data_present():
                 data = self.recv()
-                if data == '':
+                if data == b'':
+                    logging.info('closed connection')
                     self.request.close()
                     return
-                if '\n' in data:
-                    buffer += data.split('\n')
+                if b'\n' in data:
+                    buffer += data.split(b'\n')
                 else:
                     buffer.append(data)
             for sender, msg in room.get_msgs(id):
-                msg = ':'.join((sender, msg))
+                msg = b':'.join((sender, msg))
+                logging.debug('send to   %s type %s: %s', *msg.split(b':'))
                 self.send(msg)
 
 
@@ -85,18 +89,31 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     pass
 
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
-    host = '0.0.0.0'
-    port = 1234
+@click.command()
+@click.option('--host', required=True,
+              default='0.0.0.0')
+@click.option('--port', required=True,
+              default=8000, type=int)
+@click.option('--debug', is_flag=True, default=False,
+              help='debug mode turns on more debug messages and stores all \
+              test inputs to specified test folder')
+def main(host, port, debug):
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
 
     server = ThreadedTCPServer((host, port), ThreadedTCPRequestHandler)
     try:
         server_thread = threading.Thread(target=server.serve_forever)
-        # Exit the server thread when the main thread terminates
         server_thread.daemon = True
         server_thread.start()
+        logging.info('ready to connect')
         while True:
             time.sleep(0.5)
     except Exception:
         server.shutdown()
+
+
+if __name__ == "__main__":
+    main()
