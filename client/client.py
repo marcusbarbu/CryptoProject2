@@ -146,10 +146,8 @@ def create_screen(lines):
 
 
 @click.command()
-@click.option('--host', required=True,
-              default='0.0.0.0')
-@click.option('--port', required=True,
-              default=8000, type=int)
+@click.option('--host', default='0.0.0.0')
+@click.option('--port', default=8000, type=int)
 @click.option('--pass', 'password',
               help='passphrase for room attempting to connect to')
 @click.option('--salt', default='$2b$12$SNu.m09jY.Qq5ya2WZiEc.',

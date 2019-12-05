@@ -90,10 +90,8 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 
 @click.command()
-@click.option('--host', required=True,
-              default='0.0.0.0')
-@click.option('--port', required=True,
-              default=8000, type=int)
+@click.option('--host', default='0.0.0.0')
+@click.option('--port', default=8000, type=int)
 @click.option('--debug', is_flag=True, default=False,
               help='debug mode turns on more debug messages and stores all \
               test inputs to specified test folder')
