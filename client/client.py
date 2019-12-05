@@ -48,32 +48,32 @@ class Client(object):
         msg = self.sock.recv(1024).strip()
         return msg
 
-    def recvfrom(self, target):
-        try:
-            sender, data = self.recv().split(b':', 1)
-        except ValueError:
-            pass
-        if sender == target:
-            return data
-
-    def recvmsg(self):
+    def recvmsgs(self):
         if not self.box:
             logging.error('not connected')
             self.abort()
-        data = self.recvfrom(self.partner)
-        try:
-            _, data = data.split(b':')
-        except ValueError:
-            logging.error('received bad msg')
-            self.abort()
+        data = self.recv()
+        data = data.split(b'\n')
+        processed = []
+        for line in data:
+            if not line:
+                continue
+            line = line.strip()
+            try:
+                sender, _, line = line.split(b':')
+                if sender != self.partner:
+                    continue
+            except ValueError:
+                logging.error('received bad msg: %s', line)
 
-        try:
-            decrypted = self.box.decrypt(base64.b64decode(data)).strip()
-        except CryptoError:
-            logging.error('tampered message')
-            self.abort()
+            try:
+                processed.append(
+                    self.box.decrypt(base64.b64decode(line)).strip())
+            except CryptoError:
+                logging.error('tampered message')
+                self.abort()
 
-        return decrypted
+        return processed
 
     def hmac(self, data):
         return hmac.new(self.passphrase,
@@ -115,21 +115,21 @@ class Client(object):
                         self.sendto(sender, b'public', b64_publickey)
                 else:
                     logging.warning(
-                        'received own public key, possible attacker')
+                        'recieved own public key, possible attacker')
             elif type == b'hmac':
                 pk_arrived.append(sender)
                 if data == valid_hmac:
-                    logging.info('received valid hmac of public key')
+                    logging.info('recieved valid hmac of public key')
                     self.sendto(sender, self.ack_phrase, self.integrity)
                     own_acks.add(sender)
                 else:
-                    logging.warning('received invalid hmac of public key')
+                    logging.warning('recieved invalid hmac of public key')
             elif type == b'ack':
                 if data == self.integrity:
-                    logging.info('partner received valid hmac of public key')
+                    logging.info('partner recieved valid hmac of public key')
                     other_acks.add(sender)
                 else:
-                    logging.warning('received invalid ack, possible attacker')
+                    logging.warning('recieved invalid ack, possible attacker')
             intersect = own_acks.intersection(other_acks)
             if len(intersect) > 0:
                 logging.info('found valid partner')
@@ -178,14 +178,16 @@ def main(host, port, password, salt, debug):
             read_socks, _, _ = select.select(socks, [], [])
             for sock in read_socks:
                 if sock == client.sock:
-                    msg = client.recvmsg().decode('UTF-8')
-                    lines.append('them: ' + msg)
+                    msgs = client.recvmsgs()
+                    for msg in msgs:
+                        lines.append('them: ' + msg.decode('UTF-8'))
                 else:
                     msg = sys.stdin.readline()
                     lines.append('you: ' + msg.strip())
                     client.sendmsg(msg.encode('UTF-8'))
             create_screen(lines)
-    except Exception:
+    except Exception as err:
+        logging.error(err)
         client.sock.close()
 
 

@@ -82,7 +82,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             for sender, msg in room.get_msgs(id):
                 msg = b':'.join((sender, msg))
                 logging.debug('send to   %s type %s: %s', *msg.split(b':'))
-                self.send(msg)
+                self.send(msg + b'\n')
 
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
