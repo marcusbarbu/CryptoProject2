@@ -19,8 +19,7 @@ class Client(object):
     def __init__(self, host, port, passphrase, salt):
         self.passphrase = bytes(passphrase, 'UTF-8')
         self.salt = bytes(salt, 'UTF-8')
-        self.ack_phrase = b'ack'
-        self.integrity = base64.b64encode(self.hmac(self.ack_phrase))
+        self.id = None
         self.partner = None
         self.box = None
         try:
@@ -71,7 +70,6 @@ class Client(object):
                     self.box.decrypt(base64.b64decode(line)).strip())
             except CryptoError:
                 logging.error('tampered message')
-                self.abort()
 
         return processed
 
@@ -89,10 +87,22 @@ class Client(object):
             bcrypt.hashpw(self.passphrase, self.salt))
         self.send(hashed_pword)
 
+        try:
+            sender, type, id = self.recv().split(b':')
+            if sender != b'0' or type != b'id':
+                logging.error('invalid id grant from server')
+                self.abort()
+            self.id = id
+        except ValueError:
+            logging.error('invalid id grant from server')
+            self.abort()
+
         secretkey = PrivateKey.generate()
         publickey = bytes(secretkey.public_key)
-        b64_publickey = base64.b64encode(publickey)
-        self.sendto(b'0', b'public', base64.b64encode(publickey))
+        public_key_hmac = self.hmac(b'|'.join((b'send', publickey)))
+        fmt_publickey = base64.b64encode(
+            b'|'.join((publickey, public_key_hmac)))
+        self.sendto(b'0', b'public', fmt_publickey)
 
         valid_hmac = base64.b64encode(self.hmac(publickey))
         own_acks = set([])
@@ -105,31 +115,37 @@ class Client(object):
             except ValueError:
                 continue
             if type == b'public':
-                if data != b64_publickey:
-                    logging.info('recvieved public key')
+                if data != fmt_publickey:
+                    logging.info('received public key')
                     decode_public = base64.b64decode(data)
-                    public_recvd[sender] = decode_public
-                    gen_hmac = base64.b64encode(self.hmac(decode_public))
+                    recv_public, recv_hmac = decode_public.split(b'|')
+                    check_hmac = self.hmac(b'|'.join((b'send', recv_public)))
+                    if recv_hmac != check_hmac:
+                        logging.error('received invalid public key hmac')
+                        continue
+                    public_recvd[sender] = recv_public
+                    gen_hmac = base64.b64encode(self.hmac(recv_public))
                     self.sendto(sender, b'hmac', gen_hmac)
                     if sender not in pk_arrived:
-                        self.sendto(sender, b'public', b64_publickey)
+                        self.sendto(sender, b'public', fmt_publickey)
                 else:
                     logging.warning(
-                        'recieved own public key, possible attacker')
+                        'received own public key, possible attacker')
             elif type == b'hmac':
                 pk_arrived.append(sender)
                 if data == valid_hmac:
-                    logging.info('recieved valid hmac of public key')
-                    self.sendto(sender, self.ack_phrase, self.integrity)
+                    logging.info('received valid hmac of public key')
+                    self.sendto(sender, b'ack',
+                                base64.b64encode(self.hmac(self.id)))
                     own_acks.add(sender)
                 else:
-                    logging.warning('recieved invalid hmac of public key')
+                    logging.warning('received invalid hmac of public key')
             elif type == b'ack':
-                if data == self.integrity:
-                    logging.info('partner recieved valid hmac of public key')
+                if data == base64.b64encode(self.hmac(sender)):
+                    logging.info('partner received valid hmac of public key')
                     other_acks.add(sender)
                 else:
-                    logging.warning('recieved invalid ack, possible attacker')
+                    logging.warning('received invalid ack, possible attacker')
             intersect = own_acks.intersection(other_acks)
             if len(intersect) > 0:
                 logging.info('found valid partner')

@@ -59,6 +59,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
         room = switchboard[hashed_pword]
         id = room.add_client()
+        self.send(b':'.join([b'0', b'id', id]))
 
         while True:
             if buffer:
